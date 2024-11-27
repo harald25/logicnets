@@ -52,7 +52,8 @@ class QuantBrevitasActivation(nn.Module):
         quant_type = self.get_quant_type()
         scale_factor, bits = self.get_scale_factor_bits()
         if quant_type == QuantType.INT:
-            tensor_quant = self.brevitas_module.act_quant_proxy.fused_activation_quant_proxy.tensor_quant
+            # tensor_quant = self.brevitas_module.act_quant_proxy.fused_activation_quant_proxy.tensor_quant
+            tensor_quant = self.brevitas_module.act_quant.fused_activation_quant_proxy.tensor_quant
             narrow_range = tensor_quant.int_quant.narrow_range
             signed = tensor_quant.int_quant.signed
             offset = 2**(bits-1) -int(narrow_range) if signed else 0
@@ -71,7 +72,8 @@ class QuantBrevitasActivation(nn.Module):
         self.is_bin_output = False
 
     def get_quant_type(self):
-        brevitas_module_type = type(self.brevitas_module.act_quant_proxy.fused_activation_quant_proxy.tensor_quant)
+        # brevitas_module_type = type(self.brevitas_module.act_quant_proxy.fused_activation_quant_proxy.tensor_quant)
+        brevitas_module_type = type(self.brevitas_module.act_quant.fused_activation_quant_proxy.tensor_quant)
         if brevitas_module_type == RescalingIntQuant:
             return QuantType.INT
         elif brevitas_module_type == ClampedBinaryQuant:
@@ -82,10 +84,14 @@ class QuantBrevitasActivation(nn.Module):
     # TODO: Allow for different bitwidths / scales per output
     def get_scale_factor_bits(self):
         # TODO: put guards in this based on quantization type
-        quant_proxy = self.brevitas_module.act_quant_proxy
+        # quant_proxy = self.brevitas_module.act_quant_proxy
+        quant_proxy = self.brevitas_module.act_quant
         current_status = quant_proxy.training
         quant_proxy.eval()
-        _, scale_factor, bits = quant_proxy(quant_proxy.zero_hw_sentinel)
+        # _, scale_factor, bits = quant_proxy(quant_proxy._zero_hw_sentinel())
+        quant_tensor = quant_proxy(quant_proxy._zero_hw_sentinel())
+        scale_factor = quant_tensor.scale
+        bits = quant_tensor.bit_width
         quant_proxy.training = current_status
         return scale_factor, bits
 
@@ -96,7 +102,8 @@ class QuantBrevitasActivation(nn.Module):
         quant_type = self.get_quant_type()
         scale_factor, bits = self.get_scale_factor_bits()
         if quant_type == QuantType.INT:
-            tensor_quant = self.brevitas_module.act_quant_proxy.fused_activation_quant_proxy.tensor_quant
+            # tensor_quant = self.brevitas_module.act_quant_proxy.fused_activation_quant_proxy.tensor_quant
+            tensor_quant = self.brevitas_module.act_quant.fused_activation_quant_proxy.tensor_quant
             narrow_range = tensor_quant.int_quant.narrow_range
             signed = tensor_quant.int_quant.signed
             state_space = get_float_state_space(bits, scale_factor, signed, narrow_range, quant_type)
@@ -112,7 +119,7 @@ class QuantBrevitasActivation(nn.Module):
         quant_type = self.get_quant_type()
         _, bits = self.get_scale_factor_bits()
         if quant_type == QuantType.INT:
-            tensor_quant = self.brevitas_module.act_quant_proxy.fused_activation_quant_proxy.tensor_quant
+            tensor_quant = self.brevitas_module.act_quant.fused_activation_quant_proxy.tensor_quant
             narrow_range = tensor_quant.int_quant.narrow_range
             signed = tensor_quant.int_quant.signed
             state_space = get_int_state_space(bits, signed, narrow_range)
