@@ -20,26 +20,40 @@ from brevitas.core.quant import RescalingIntQuant, ClampedBinaryQuant
 from brevitas.core.scaling import ScalingImplType
 import brevitas.nn as bnn
 
+
 # TODO: Put this inside an abstract base class
 def get_int_state_space(bits: int, signed: bool, narrow_range: bool):
-    start = int(0 if not signed else (-2**(bits-1) + int(narrow_range))) # calculate the minimum value in the range
-    end = int(start + 2**(bits) - int(narrow_range)) # calculate the maximum of the range
+    start = int(
+        0 if not signed else (-(2 ** (bits - 1)) + int(narrow_range))
+    )  # calculate the minimum value in the range
+    end = int(
+        start + 2 ** (bits) - int(narrow_range)
+    )  # calculate the maximum of the range
     state_space = torch.as_tensor(range(start, end))
     return state_space
 
+
 # TODO: Put this inside an abstract base class
-def get_float_state_space(bits: int, scale_factor: float, signed: bool, narrow_range: bool, quant_type: QuantType):
+def get_float_state_space(
+    bits: int,
+    scale_factor: float,
+    signed: bool,
+    narrow_range: bool,
+    quant_type: QuantType,
+):
     if quant_type == QuantType.INT:
         bin_state_space = get_int_state_space(bits, signed, narrow_range)
     elif quant_type == QuantType.BINARY:
-        bin_state_space = torch.as_tensor([-1., 1.])
+        bin_state_space = torch.as_tensor([-1.0, 1.0])
     state_space = scale_factor * bin_state_space
     return state_space
 
+
 # TODO: Add an abstract class with a specific interface which all brevitas-based classes inherit from?
 class QuantBrevitasActivation(nn.Module):
-
-    def __init__(self, brevitas_module, pre_transforms: list = [], post_transforms: list = []):
+    def __init__(
+        self, brevitas_module, pre_transforms: list = [], post_transforms: list = []
+    ):
         super(QuantBrevitasActivation, self).__init__()
         self.brevitas_module = brevitas_module
         self.pre_transforms = nn.ModuleList(pre_transforms)
@@ -53,10 +67,12 @@ class QuantBrevitasActivation(nn.Module):
         scale_factor, bits = self.get_scale_factor_bits()
         if quant_type == QuantType.INT:
             # tensor_quant = self.brevitas_module.act_quant_proxy.fused_activation_quant_proxy.tensor_quant
-            tensor_quant = self.brevitas_module.act_quant.fused_activation_quant_proxy.tensor_quant
+            tensor_quant = (
+                self.brevitas_module.act_quant.fused_activation_quant_proxy.tensor_quant
+            )
             narrow_range = tensor_quant.int_quant.narrow_range
             signed = tensor_quant.int_quant.signed
-            offset = 2**(bits-1) -int(narrow_range) if signed else 0
+            offset = 2 ** (bits - 1) - int(narrow_range) if signed else 0
             return f"{int(x+offset):0{int(bits)}b}"
         elif quant_type == QuantType.BINARY:
             return f"{int(x):0{int(bits)}b}"
@@ -73,13 +89,19 @@ class QuantBrevitasActivation(nn.Module):
 
     def get_quant_type(self):
         # brevitas_module_type = type(self.brevitas_module.act_quant_proxy.fused_activation_quant_proxy.tensor_quant)
-        brevitas_module_type = type(self.brevitas_module.act_quant.fused_activation_quant_proxy.tensor_quant)
+        brevitas_module_type = type(
+            self.brevitas_module.act_quant.fused_activation_quant_proxy.tensor_quant
+        )
         if brevitas_module_type == RescalingIntQuant:
             return QuantType.INT
         elif brevitas_module_type == ClampedBinaryQuant:
             return QuantType.BINARY
         else:
-            raise Exception("Unknown quantization type for tensor_quant: {}".format(brevitas_module_type))
+            raise Exception(
+                "Unknown quantization type for tensor_quant: {}".format(
+                    brevitas_module_type
+                )
+            )
 
     # TODO: Allow for different bitwidths / scales per output
     def get_scale_factor_bits(self):
@@ -103,12 +125,16 @@ class QuantBrevitasActivation(nn.Module):
         scale_factor, bits = self.get_scale_factor_bits()
         if quant_type == QuantType.INT:
             # tensor_quant = self.brevitas_module.act_quant_proxy.fused_activation_quant_proxy.tensor_quant
-            tensor_quant = self.brevitas_module.act_quant.fused_activation_quant_proxy.tensor_quant
+            tensor_quant = (
+                self.brevitas_module.act_quant.fused_activation_quant_proxy.tensor_quant
+            )
             narrow_range = tensor_quant.int_quant.narrow_range
             signed = tensor_quant.int_quant.signed
-            state_space = get_float_state_space(bits, scale_factor, signed, narrow_range, quant_type)
+            state_space = get_float_state_space(
+                bits, scale_factor, signed, narrow_range, quant_type
+            )
         elif quant_type == QuantType.BINARY:
-            state_space = scale_factor*torch.tensor([-1, 1])
+            state_space = scale_factor * torch.tensor([-1, 1])
         else:
             raise Exception("Unknown quantization type: {}".format(quant_type))
         return self.apply_post_transforms(state_space)
@@ -119,7 +145,9 @@ class QuantBrevitasActivation(nn.Module):
         quant_type = self.get_quant_type()
         _, bits = self.get_scale_factor_bits()
         if quant_type == QuantType.INT:
-            tensor_quant = self.brevitas_module.act_quant.fused_activation_quant_proxy.tensor_quant
+            tensor_quant = (
+                self.brevitas_module.act_quant.fused_activation_quant_proxy.tensor_quant
+            )
             narrow_range = tensor_quant.int_quant.narrow_range
             signed = tensor_quant.int_quant.signed
             state_space = get_int_state_space(bits, signed, narrow_range)
@@ -144,10 +172,9 @@ class QuantBrevitasActivation(nn.Module):
             s, _ = self.get_scale_factor_bits()
             x = self.apply_pre_transforms(x)
             x = self.brevitas_module(x)
-            x = torch.round(x/s).type(torch.int64)
+            x = torch.round(x / s).type(torch.int64)
         else:
             x = self.apply_pre_transforms(x)
             x = self.brevitas_module(x)
             x = self.apply_post_transforms(x)
         return x
-

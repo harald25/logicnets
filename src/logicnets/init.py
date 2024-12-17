@@ -17,6 +17,7 @@ import torch.nn as nn
 from torch import Tensor
 from torch.nn import init
 
+
 # TODO: Expand to support tensors larger than 2 dimensions
 def random_restrict_fanin(mask: Tensor, fan_in: int) -> Tensor:
     vector_size, num_vectors = nn.init._calculate_fan_in_and_fan_out(mask)
@@ -28,4 +29,3 @@ def random_restrict_fanin(mask: Tensor, fan_in: int) -> Tensor:
     else:
         assert False, "Unsupported mask shape, specified: %s" % (str(mask.shape))
     return mask
-
