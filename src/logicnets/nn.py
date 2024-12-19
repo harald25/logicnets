@@ -21,6 +21,10 @@ from torch.nn import init
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
+from tqdm import tqdm
+import os
+from typing import List, Any, Tuple
+
 from .init import random_restrict_fanin
 from .util import fetch_mask_indices, generate_permutation_matrix
 from .verilog import (
@@ -31,6 +35,10 @@ from .verilog import (
     generate_register_verilog,
 )
 from .bench import generate_lut_bench, generate_lut_input_string, sort_to_bench
+
+
+def dummy_worker(args):
+    return "a string"
 
 
 # TODO: Create a container module which performs this function.
@@ -74,6 +82,7 @@ def module_list_to_verilog_module(
     output_directory: str,
     add_registers: bool = True,
     generate_bench: bool = True,
+    num_processes: int = 0,
 ):
     input_bitwidth = None
     output_bitwidth = None
@@ -82,9 +91,17 @@ def module_list_to_verilog_module(
         m = module_list[i]
         if type(m) == SparseLinearNeq:
             module_prefix = f"layer{i}"
-            module_input_bits, module_output_bits = m.gen_layer_verilog(
-                module_prefix, output_directory, generate_bench=generate_bench
-            )
+            if num_processes > 0:
+                if os.cpu_count()-1 < num_processes:
+                    print("Limiting number of processes to available CPU cores")
+                    num_processes = os.cpu_count()-1
+                module_input_bits, module_output_bits = m.gen_layer_verilog_multiprocess(
+                    module_prefix, output_directory, generate_bench=generate_bench, num_processes=num_processes
+                )
+            else:
+                module_input_bits, module_output_bits = m.gen_layer_verilog(
+                    module_prefix, output_directory, generate_bench=generate_bench
+                )
             if i == 0:
                 input_bitwidth = module_input_bits
             if i == len(module_list) - 1:
@@ -99,9 +116,7 @@ def module_list_to_verilog_module(
                 register=add_registers,
             )
         else:
-            raise Exception(
-                f"Expect type(module) == SparseLinearNeq, {type(module)} found"
-            )
+            raise Exception(f"Expect type(module) == SparseLinearNeq, {type(m)} found")
     module_list_verilog = generate_logicnets_verilog(
         module_name=module_name,
         input_name="M0",
@@ -219,6 +234,122 @@ class SparseLinearNeq(nn.Module):
         with open(f"{directory}/{module_prefix}.v", "w") as f:
             f.write(layer_contents)
         return total_input_bits, total_output_bits
+
+    def _gen_layer_verilog_multiprocess_worker(
+        self,
+        index: int,
+        module_prefix: str,
+        directory: str,
+        generate_bench: bool,
+        input_bitwidth: int,
+        output_bitwidth: int,
+    ) -> Tuple[int, str]:
+
+        output_offset = index * output_bitwidth
+        module_name = f"{module_prefix}_N{index}"
+        indices, _, _, _ = self.neuron_truth_tables[index]
+
+        neuron_verilog = self.gen_neuron_verilog(index, module_name)
+        with open(f"{directory}/{module_name}.v", "w") as f:
+            f.write(neuron_verilog)
+        if generate_bench:
+            neuron_bench = self.gen_neuron_bench(
+                index, module_name
+            )  # Generate the contents of the neuron verilog
+            with open(f"{directory}/{module_name}.bench", "w") as f:
+                f.write(neuron_bench)
+        connection_string = generate_neuron_connection_verilog(indices, input_bitwidth)
+        wire_name = f"{module_name}_wire"
+        connection_line = f"wire [{len(indices)*input_bitwidth-1}:0] {wire_name} = {{{connection_string}}};\n"
+        inst_line = f"{module_name} {module_name}_inst (.M0({wire_name}), .M1(M1[{output_offset+output_bitwidth-1}:{output_offset}]));\n\n"
+
+        layer_contents = connection_line + inst_line
+        return layer_contents
+
+    def gen_layer_verilog_multiprocess(
+        self, module_prefix, directory, generate_bench: bool = True
+    ):
+        _, input_bitwidth = self.input_quant.get_scale_factor_bits()
+        _, output_bitwidth = self.output_quant.get_scale_factor_bits()
+        input_bitwidth, output_bitwidth = int(input_bitwidth), int(output_bitwidth)
+        total_input_bits = self.in_features * input_bitwidth
+        total_output_bits = self.out_features * output_bitwidth
+        layer_contents = f"module {module_prefix} (input [{total_input_bits-1}:0] M0, output [{total_output_bits-1}:0] M1);\n\n"
+
+        # How many processes to use
+        # TODO: make this a parameter of the program
+        num_processes = 7
+        # Calculate how many jobs each process will do
+        jobs_per_process = self.out_features // num_processes
+        # Create a list to store the start and end indices of the modules that each process will generate
+        jobs = [None] * num_processes
+        for i in range(num_processes):
+            # We should use a +1 for the end index to account for the 0-indexing. But we will use
+            # the indices as a range, which is exclusive of the end index, so we don't need to add 1
+            jobs[i] = [i * jobs_per_process, ((i + 1) * jobs_per_process)]
+        # Add the remainder to the last process (if there is any). Could be improved by distributing
+        # the remainder across all processes.
+        jobs[-1][1] += self.out_features % num_processes
+
+        # Fork processes and save child ids in a list
+        child_ids = []
+        read_fds = []
+        for job in jobs:
+            read_fd, write_fd = os.pipe()
+            process_id = os.fork()
+            # If process id == 0, this is a child process
+            if process_id == 0:
+                print("Child: I am child process: ", os.getpid())
+                os.close(
+                    read_fd
+                )  # We are not reading from the pipe in the child process
+                layer_contents = ""
+                # do stuff
+                for i in range(job[0], job[1]):
+                    layer_content = self._gen_layer_verilog_multiprocess_worker(
+                        index=i,
+                        module_prefix=module_prefix,
+                        directory=directory,
+                        generate_bench=generate_bench,
+                        input_bitwidth=input_bitwidth,
+                        output_bitwidth=output_bitwidth,
+                    )
+                    layer_contents += layer_content
+                os.write(write_fd, layer_contents.encode())
+                os.close(write_fd)
+                os._exit(0)
+            # This is the parent process
+            else:
+                child_ids.append(process_id)
+                read_fds.append(read_fd)
+                os.close(
+                    write_fd
+                )  # We are not writing to the pipe in the parent process
+                print(f"Parent: I have spawned child process: {process_id}")
+
+        print(f"Parent: waiting for children '{child_ids}' to finish")
+        # Wait for all child processes to finish
+        for child, fd in zip(child_ids, read_fds):
+            os.waitpid(child, 0)
+            # Read the results from the child process and concatenate them
+            layer_contents += self._read_all_from_pipe(fd)
+            os.close(fd)
+
+        layer_contents += "endmodule"
+
+        with open(f"{directory}/{module_prefix}.v", "w") as f:
+            f.write(layer_contents)
+
+        return total_input_bits, total_output_bits
+
+    def _read_all_from_pipe(self, read_fd):
+        data = b""  # Initialize an empty byte string
+        while True:
+            chunk = os.read(read_fd, 1024)  # Read in chunks of 1024 bytes
+            if not chunk:  # If no more data is available, stop reading
+                break
+            data += chunk
+        return data.decode()  # Decode the full data when done
 
     # TODO: Move the verilog string templates to elsewhere
     # TODO: Move this to another class
