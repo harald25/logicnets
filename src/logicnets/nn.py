@@ -47,7 +47,10 @@ def generate_truth_tables(model: nn.Module, verbose: bool = False) -> None:
     training = model.training
     model.eval()
     for name, module in tqdm(
-        model.named_modules(), desc="Generating Truth Tables", unit="module"
+        model.named_modules(),
+        desc="Generating Truth Tables",
+        unit="module",
+        position=0,
     ):
         if type(module) == SparseLinearNeq:
             if verbose:
@@ -92,11 +95,16 @@ def module_list_to_verilog_module(
         if type(m) == SparseLinearNeq:
             module_prefix = f"layer{i}"
             if num_processes > 0:
-                if os.cpu_count()-1 < num_processes:
+                if os.cpu_count() - 1 < num_processes:
                     print("Limiting number of processes to available CPU cores")
-                    num_processes = os.cpu_count()-1
-                module_input_bits, module_output_bits = m.gen_layer_verilog_multiprocess(
-                    module_prefix, output_directory, generate_bench=generate_bench, num_processes=num_processes
+                    num_processes = os.cpu_count() - 1
+                module_input_bits, module_output_bits = (
+                    m.gen_layer_verilog_multiprocess(
+                        module_prefix,
+                        output_directory,
+                        generate_bench=generate_bench,
+                        num_processes=num_processes,
+                    )
                 )
             else:
                 module_input_bits, module_output_bits = m.gen_layer_verilog(
@@ -490,7 +498,13 @@ class SparseLinearNeq(nn.Module):
             # Precalculate all of the input value permutations
             input_state_space = list()  # TODO: is a list the right data-structure here?
             bin_state_space = list()
-            for m in range(self.in_features):
+            for m in tqdm(
+                range(self.in_features),
+                desc="Precalculate input state space",
+                unit="in feature",
+                position=1,
+                leave=False,
+            ):
                 neuron_state_space = (
                     self.input_quant.get_state_space()
                 )  # TODO: this call should include the index of the element of interest
@@ -501,7 +515,13 @@ class SparseLinearNeq(nn.Module):
                 bin_state_space.append(bin_space)
 
             neuron_truth_tables = list()
-            for n in range(self.out_features):
+            for n in tqdm(
+                range(self.out_features),
+                desc="Calculating truth tables",
+                unit="out feature",
+                position=1,
+                leave=False,
+            ):
                 # Determine the fan-in as number of synapse connections
                 input_mask = mask[n, :]
                 fan_in = torch.sum(input_mask)
