@@ -85,7 +85,7 @@ def module_list_to_verilog_module(
     output_directory: str,
     add_registers: bool = True,
     generate_bench: bool = True,
-    num_processes: int = 0,
+    num_processes: int = 1,
 ):
     input_bitwidth = None
     output_bitwidth = None
@@ -275,7 +275,7 @@ class SparseLinearNeq(nn.Module):
         return layer_contents
 
     def gen_layer_verilog_multiprocess(
-        self, module_prefix, directory, generate_bench: bool = True
+        self, module_prefix, directory, generate_bench: bool = True, num_processes: int = 1
     ):
         _, input_bitwidth = self.input_quant.get_scale_factor_bits()
         _, output_bitwidth = self.output_quant.get_scale_factor_bits()
@@ -284,9 +284,6 @@ class SparseLinearNeq(nn.Module):
         total_output_bits = self.out_features * output_bitwidth
         layer_contents = f"module {module_prefix} (input [{total_input_bits-1}:0] M0, output [{total_output_bits-1}:0] M1);\n\n"
 
-        # How many processes to use
-        # TODO: make this a parameter of the program
-        num_processes = 7
         # Calculate how many jobs each process will do
         jobs_per_process = self.out_features // num_processes
         # Create a list to store the start and end indices of the modules that each process will generate
